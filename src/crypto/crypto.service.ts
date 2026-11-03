@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { KeyPair } from './crypto.interfaces';
+import { randomUUID } from 'node:crypto';
 
 @Injectable()
 export class CryptoService {
@@ -124,5 +125,9 @@ export class CryptoService {
   ): boolean {
     const hc = this.modExp(signature, e, n);
     return hc === hash;
+  }
+
+  public generateRandomId(): string {
+    return randomUUID();
   }
 }
