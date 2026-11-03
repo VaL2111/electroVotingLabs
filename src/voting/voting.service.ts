@@ -1,131 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { CryptoService } from '../crypto/crypto.service';
-
-export interface PublicKey {
-  e: bigint;
-  n: bigint;
-}
-
-export interface PrivateKey {
-  d: bigint;
-  n: bigint;
-}
-
-interface Ballot {
-  id: string;
-  candidate: string;
-}
-
-interface BallotSetData {
-  ballots: Ballot[];
-  hashes: bigint[];
-  blindingFactors: { r: bigint; rInv: bigint }[];
-  blindedHashes: bigint[];
-}
-
-interface RevealedSet {
-  ballots: Ballot[];
-  blindingFactors: bigint[];
-}
-
-interface PendingVerification {
-  blindedSets: bigint[][];
-  indicesToReveal: number[];
-  unrevealedIndex: number;
-}
-
-export class Voter {
-  public readonly fullName: string;
-  private ballotSets: BallotSetData[] = [];
-  private unrevealedIndex = -1;
-  private unblindedSignatures: bigint[] = [];
-
-  constructor(
-    fullName: string,
-    private readonly crypto: CryptoService,
-  ) {
-    this.fullName = fullName;
-  }
-
-  // Формує 10 наборів бюлетенів, хешує, маскує і повертає масив замаскованих наборів
-  prepareBallotSets(
-    candidates: string[],
-    ecPublicKey: PublicKey,
-    cheatAtIndex?: number,
-  ): bigint[][] {
-    this.ballotSets = [];
-
-    for (let i = 0; i < 10; i++) {
-      const id = Math.random().toString(36).substring(2, 12);
-
-      // cheatAtIndex — для негативного сценарію
-      const ballots: Ballot[] =
-        cheatAtIndex === i
-          ? candidates.map(() => ({ id, candidate: candidates[0] }))
-          : candidates.map((candidate) => ({ id, candidate }));
-
-      const hashes = ballots.map((b) =>
-        this.crypto.customHash(JSON.stringify(b), ecPublicKey.n),
-      );
-
-      const blindingFactors = hashes.map(() =>
-        this.crypto.generateBlindingFactor(ecPublicKey.n),
-      );
-
-      const blindedHashes = hashes.map((h, j) =>
-        this.crypto.blindHash(
-          h,
-          blindingFactors[j].r,
-          ecPublicKey.e,
-          ecPublicKey.n,
-        ),
-      );
-
-      this.ballotSets.push({ ballots, hashes, blindingFactors, blindedHashes });
-    }
-
-    return this.ballotSets.map((set) => set.blindedHashes);
-  }
-
-  // Розкриває 9 наборів, тобто повертає масив об'єктів
-  // в свою чергу об'єкт складається з оригінальних бюлетенів + множники маскування
-  revealSets(indicesToReveal: number[]): RevealedSet[] {
-    this.unrevealedIndex = Array.from({ length: 10 }, (_, i) => i).find(
-      (i) => !indicesToReveal.includes(i),
-    )!;
-
-    return indicesToReveal.map((i) => ({
-      ballots: this.ballotSets[i].ballots,
-      blindingFactors: this.ballotSets[i].blindingFactors.map((bf) => bf.r),
-    }));
-  }
-
-  // Знімає маскування з отриманих сліпих підписів
-  unblindSignatures(blindSignatures: bigint[], n: bigint): void {
-    const set = this.ballotSets[this.unrevealedIndex];
-    this.unblindedSignatures = blindSignatures.map((s, i) =>
-      this.crypto.unblindSignature(s, set.blindingFactors[i].rInv, n),
-    );
-  }
-
-  // Обирає бюлетень, шифрує {бюлетень, підпис} публічним ключем ВК
-  castVote(candidateName: string, ecPublicKey: PublicKey): bigint[] {
-    const set = this.ballotSets[this.unrevealedIndex];
-    const candidateIndex = set.ballots.findIndex(
-      (b) => b.candidate === candidateName,
-    );
-
-    const ballot = set.ballots[candidateIndex];
-    const signature = this.unblindedSignatures[candidateIndex];
-
-    const payload = JSON.stringify({
-      ballot: JSON.stringify(ballot),
-      signature: signature.toString(),
-    });
-
-    return this.crypto.encrypt(payload, ecPublicKey.e, ecPublicKey.n);
-  }
-}
+import { PrivateKey, PublicKey } from '../crypto/crypto.interfaces';
+import { AnonymousVoterRecord } from '../registration/registration.interface';
+import {
+  Ballot,
+  PublishedBallot,
+  SignedVotePayload,
+} from '../voter/voter.interface';
 
 @Injectable()
 export class VotingService {
@@ -133,17 +14,11 @@ export class VotingService {
   private readonly ecPrivateKey: PrivateKey;
 
   private readonly candidates: string[] = [];
-  private readonly registeredVoters: Set<string> = new Set();
-  private readonly hasReceivedSignedSet: Set<string> = new Set();
+  private readonly validRns: Map<string, PublicKey> = new Map();
+  private readonly usedRns: Set<string> = new Set();
   private readonly usedIds: Set<string> = new Set();
   private readonly votesCount: Map<string, number> = new Map();
-  private readonly pendingVerifications: Map<string, PendingVerification> =
-    new Map();
-  private readonly publishedBallots: {
-    id: string;
-    candidate: string;
-    signature: string;
-  }[] = [];
+  private readonly publishedBallots: PublishedBallot[] = [];
 
   constructor(private readonly cryptoService: CryptoService) {
     const keys = this.cryptoService.generateKeyPair();
@@ -151,176 +26,76 @@ export class VotingService {
     this.ecPrivateKey = keys.privateKey;
   }
 
-  registerCandidate(name: string): void {
-    this.candidates.push(name);
-    this.votesCount.set(name, 0);
-    console.log(`[ВК] Зареєстровано кандидата: ${name}`);
+  registerCandidate(fullName: string): void {
+    this.candidates.push(fullName);
+    this.votesCount.set(fullName, 0);
+    console.log(`Зареєстровано кандидата: ${fullName}`);
   }
 
-  registerVoter(name: string): void {
-    this.registeredVoters.add(name);
-    console.log(`[ВК] Зареєстровано виборця: ${name}`);
-  }
-
-  // Приймає замасковані хеші, обирає 9 для перевірки
-  // Повертається масив індексів, тобто набори, які потрібно перевірити
-  receiveBlindedHashes(
-    voterName: string,
-    blindedSets: bigint[][],
-  ): number[] | null {
-    if (!this.registeredVoters.has(voterName)) {
-      console.error(`[ВІДХИЛЕНО] ${voterName} не зареєстрований`);
-      return null;
+  receiveVoterRegistryFromBR(records: AnonymousVoterRecord[]): void {
+    for (const record of records) {
+      this.validRns.set(record.rn, record.publicKey);
     }
-    if (this.hasReceivedSignedSet.has(voterName)) {
-      console.error(`[ВІДХИЛЕНО] ${voterName} вже отримував підписаний набір`);
-      return null;
-    }
-
-    const unrevealedIndex = Math.floor(Math.random() * 10);
-    const indicesToReveal = Array.from({ length: 10 }, (_, i) => i).filter(
-      (i) => i !== unrevealedIndex,
-    );
-
-    this.pendingVerifications.set(voterName, {
-      blindedSets,
-      indicesToReveal,
-      unrevealedIndex,
-    });
-
     console.log(
-      `[ВК] Отримано 10 наборів від ${voterName}. Розкрити набори: [${indicesToReveal.join(
-        ', ',
-      )}]`,
+      `Отримано від БР список із ${records.length} дійсних RN та публічних ключів`,
     );
-    return indicesToReveal;
   }
 
-  // Перевіряє 9 наборів, підписує 10-й наосліп
-  verifyAndSign(
-    voterName: string,
-    revealedSets: RevealedSet[],
-  ): bigint[] | null {
-    const pending = this.pendingVerifications.get(voterName);
-    if (!pending) return null;
-
-    const { blindedSets, indicesToReveal, unrevealedIndex } = pending;
-    const { e, n } = this.ecPublicKey;
-
-    for (let i = 0; i < indicesToReveal.length; i++) {
-      const setIndex = indicesToReveal[i];
-      const revealed = revealedSets[i];
-
-      // Перевірка: кількість бюлетенів = кількість кандидатів
-      if (revealed.ballots.length !== this.candidates.length) {
-        console.error(
-          `  [ВІДХИЛЕНО] Набір ${setIndex}: неправильна кількість бюлетенів`,
-        );
-        this.pendingVerifications.delete(voterName);
-        return null;
-      }
-
-      // Перевірка: однаковий ID в наборі
-      const ids = revealed.ballots.map((b) => b.id);
-      if (new Set(ids).size !== 1) {
-        console.error(
-          `  [ВІДХИЛЕНО] Набір ${setIndex}: різні ID в одному наборі`,
-        );
-        this.pendingVerifications.delete(voterName);
-        return null;
-      }
-
-      // Перевірка на кандидатів, що не зареєстровані
-      const candidatesInSet = revealed.ballots.map((b) => b.candidate).sort();
-      const expectedCandidates = [...this.candidates].sort();
-      if (
-        JSON.stringify(candidatesInSet) !== JSON.stringify(expectedCandidates)
-      ) {
-        console.error(
-          `  [ВІДХИЛЕНО] Набір ${setIndex}: неправильний список кандидатів`,
-        );
-        this.pendingVerifications.delete(voterName);
-        return null;
-      }
-
-      // Перевірка: замасковані хеші збігаються
-      for (let j = 0; j < revealed.ballots.length; j++) {
-        const hash = this.cryptoService.customHash(
-          JSON.stringify(revealed.ballots[j]),
-          n,
-        );
-        const expectedBlindedHash = this.cryptoService.blindHash(
-          hash,
-          revealed.blindingFactors[j],
-          e,
-          n,
-        );
-
-        if (expectedBlindedHash !== blindedSets[setIndex][j]) {
-          console.error(
-            `  [ВІДХИЛЕНО] Набір ${setIndex}, бюлетень ${j}: хеш не збігається`,
-          );
-          this.pendingVerifications.delete(voterName);
-          return null;
-        }
-      }
-    }
-
-    // Всі 9 наборів коректні → підписуємо 10-й наосліп
-    const blindSignatures = blindedSets[unrevealedIndex].map((blindedHash) =>
-      this.cryptoService.sign(
-        blindedHash,
-        this.ecPrivateKey.d,
-        this.ecPrivateKey.n,
-      ),
-    );
-
-    this.hasReceivedSignedSet.add(voterName);
-    this.pendingVerifications.delete(voterName);
-
-    console.log(`[ВК] 9 наборів перевірено. Підписано 10-й набір наосліп`);
-    return blindSignatures;
-  }
-
-  // Приймає анонімний бюлетень
-  processAnonymousBallot(encryptedBallot: bigint[]): boolean {
+  processBallot(encryptedBallot: bigint[]): boolean {
     try {
       const decrypted = this.cryptoService.decrypt(
         encryptedBallot,
         this.ecPrivateKey.d,
         this.ecPrivateKey.n,
       );
-      const parsed = JSON.parse(decrypted);
-      const ballot: Ballot = JSON.parse(parsed.ballot);
+
+      const parsed = JSON.parse(decrypted) as SignedVotePayload;
+      const ballot = JSON.parse(parsed.ballot) as Ballot;
       const signature = BigInt(parsed.signature);
 
-      const hash = this.cryptoService.customHash(
-        parsed.ballot,
-        this.ecPublicKey.n,
-      );
-      const isValid = this.cryptoService.verifySignature(
-        hash,
-        signature,
-        this.ecPublicKey.e,
-        this.ecPublicKey.n,
-      );
+      if (!ballot.rn || !this.validRns.has(ballot.rn)) {
+        console.error(
+          `Недійсний RN "${ballot.rn ?? 'відсутній'}" (немає у списку від БР)`,
+        );
+        return false;
+      }
 
-      if (!isValid) {
-        console.error(`[ВІДХИЛЕНО] Недійсний підпис ВК`);
+      if (this.usedRns.has(ballot.rn)) {
+        console.error(`RN "${ballot.rn}" вже був використаний раніше`);
         return false;
       }
 
       if (this.usedIds.has(ballot.id)) {
-        console.error(`[ВІДХИЛЕНО] ID "${ballot.id}" вже використовувався`);
+        console.error(`ID бюлетеня "${ballot.id}" вже використовувався`);
+        return false;
+      }
+
+      const voterPublicKey = this.validRns.get(ballot.rn)!;
+      const hash = this.cryptoService.customHash(
+        parsed.ballot,
+        voterPublicKey.n,
+      );
+      const isValidSignature = this.cryptoService.verifySignature(
+        hash,
+        signature,
+        voterPublicKey.e,
+        voterPublicKey.n,
+      );
+
+      if (!isValidSignature) {
+        console.error(
+          `Недійсний ЕЦП для RN "${ballot.rn}" (порушена цілісність або чужий ключ)`,
+        );
         return false;
       }
 
       const currentVotes = this.votesCount.get(ballot.candidate);
       if (currentVotes === undefined) {
-        console.error(`[ВІДХИЛЕНО] Неіснуючий кандидат "${ballot.candidate}"`);
+        console.error(`Неіснуючий кандидат "${ballot.candidate}"`);
         return false;
       }
 
+      this.usedRns.add(ballot.rn);
       this.usedIds.add(ballot.id);
       this.votesCount.set(ballot.candidate, currentVotes + 1);
       this.publishedBallots.push({
@@ -330,27 +105,37 @@ export class VotingService {
       });
 
       console.log(
-        `[УСПІХ] Анонімний бюлетень прийнято (ID: ${ballot.id}, Кандидат: ${ballot.candidate})`,
+        `Бюлетень прийнято (ID: ${ballot.id}, Кандидат: ${ballot.candidate})`,
       );
       return true;
     } catch {
-      console.error(
-        `[ВІДХИЛЕНО] Бюлетень пошкоджено або розшифрування не вдалося`,
-      );
+      console.error(`Повідомлення пошкоджено або розшифрування не вдалося`);
       return false;
     }
   }
 
+  getPublishedBallots(): PublishedBallot[] {
+    return this.publishedBallots.map((b) => ({ ...b }));
+  }
+
+  // Метод для симуляції негативного сценарію: ВК підмінює голос у результатах
+  tamperPublishedBallot(ballotId: string, fakeCandidate: string): void {
+    const target = this.publishedBallots.find((b) => b.id === ballotId);
+    if (target) {
+      target.candidate = fakeCandidate;
+    }
+  }
+
   publishResults(): void {
-    console.log('\nПІДСУМКИ ГОЛОСУВАННЯ');
+    console.log('ПІДСУМКИ ГОЛОСУВАННЯ (ВИБОРЧА КОМІСІЯ)');
 
     for (const [candidate, count] of this.votesCount.entries()) {
       console.log(`Кандидат ${candidate}: ${count} голосів`);
     }
 
-    console.log('\nОпубліковані бюлетені');
+    console.log('\nОпубліковані бюлетені (ID -> Кандидат | Підпис):');
     for (const b of this.publishedBallots) {
-      console.log(`ID: ${b.id} → ${b.candidate}`);
+      console.log(`ID: ${b.id} -> ${b.candidate} (ЕЦП: ${b.signature})`);
     }
 
     let maxVotes = -1;
@@ -366,9 +151,9 @@ export class VotingService {
 
     console.log('--------------------------------------------');
     if (winners.length > 1) {
-      console.log(`  Нічия між: ${winners.join(', ')} (${maxVotes} голосів)`);
+      console.log(`Нічия між: ${winners.join(', ')} (${maxVotes} голосів)`);
     } else {
-      console.log(`  Переможець: ${winners[0]} (${maxVotes} голосів)`);
+      console.log(`Переможець: ${winners[0]} (${maxVotes} голосів)`);
     }
   }
 }
