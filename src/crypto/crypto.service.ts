@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { KeyPair } from './crypto.interfaces';
 
 @Injectable()
 export class CryptoService {
@@ -59,7 +60,7 @@ export class CryptoService {
     return true;
   }
 
-  public generateKeyPair() {
+  public generateKeyPair(): KeyPair {
     const p = this.generatePrime(100, 500);
     let q: bigint;
     do {
@@ -123,25 +124,5 @@ export class CryptoService {
   ): boolean {
     const hc = this.modExp(signature, e, n);
     return hc === hash;
-  }
-
-  public generateBlindingFactor(n: bigint): { r: bigint; rInv: bigint } {
-    while (true) {
-      const r = BigInt(Math.floor(Math.random() * (Number(n) - 3)) + 2);
-      const { gcd, x } = this.extGCD(r, n);
-      if (gcd === 1n) {
-        const rInv = ((x % n) + n) % n;
-        return { r, rInv };
-      }
-    }
-  }
-
-  public blindHash(hash: bigint, r: bigint, e: bigint, n: bigint): bigint {
-    const re = this.modExp(r, e, n);
-    return (hash * re) % n;
-  }
-
-  public unblindSignature(blindSig: bigint, rInv: bigint, n: bigint): bigint {
-    return (blindSig * rInv) % n;
   }
 }
