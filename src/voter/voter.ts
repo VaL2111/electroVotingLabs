@@ -40,7 +40,7 @@ export class Voter {
     const currentId: string =
       options?.customId ?? this.cryptoService.generateRandomId();
 
-    if (!options) {
+    if (!options && !this.ballotId) {
       this.ballotId = currentId;
       this.chosenCandidate = candidate;
     }

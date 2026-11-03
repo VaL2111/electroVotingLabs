@@ -5,7 +5,7 @@ import { VotingModule } from './voting/voting.module';
 import { RegistrationModule } from './registration/registration.module';
 
 @Module({
-  imports: [CryptoModule, VotingModule, RegistrationModule],
+  imports: [CryptoModule, RegistrationModule, VotingModule],
   controllers: [],
   providers: [AppService],
 })
