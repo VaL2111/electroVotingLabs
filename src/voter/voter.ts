@@ -1,11 +1,6 @@
 import { PrivateKey, PublicKey } from '../crypto/crypto.interfaces';
 import { CryptoService } from '../crypto/crypto.service';
-import {
-  Ballot,
-  PublishedBallot,
-  SignedVotePayload,
-  VoteOptions,
-} from './voter.interface';
+import { Ballot, PublishedBallot, SignedVotePayload } from './voter.interface';
 
 export class Voter {
   public readonly publicKey: PublicKey;
@@ -28,38 +23,26 @@ export class Voter {
     this.rn = rn;
   }
 
-  getBallotId(): string | null {
-    return this.ballotId;
-  }
-
-  prepareEncryptedVote(
-    candidate: string,
-    ecPublicKey: PublicKey,
-    options?: VoteOptions,
-  ): bigint[] {
-    const currentId: string =
-      options?.customId ?? this.cryptoService.generateRandomId();
-
-    if (!options && !this.ballotId) {
-      this.ballotId = currentId;
-      this.chosenCandidate = candidate;
-    }
+  prepareEncryptedVote(candidate: string, ecPublicKey: PublicKey): bigint[] {
+    this.ballotId = this.cryptoService.generateRandomId();
+    this.chosenCandidate = candidate;
 
     const ballot: Ballot = {
-      id: currentId,
-      rn: options?.customRn ?? this.rn,
+      id: this.ballotId,
+      rn: this.rn,
       candidate,
     };
 
-    const ballotJson: string = JSON.stringify(ballot);
-
-    const signingKey = options?.customPrivateKey ?? this.privateKey;
-    const ballotHash = this.cryptoService.customHash(ballotJson, signingKey.n);
+    const ballotJson = JSON.stringify(ballot);
+    const ballotHash = this.cryptoService.customHash(
+      ballotJson,
+      this.privateKey.n,
+    );
 
     const signature = this.cryptoService.sign(
       ballotHash,
-      signingKey.d,
-      signingKey.n,
+      this.privateKey.d,
+      this.privateKey.n,
     );
 
     const payload: SignedVotePayload = {
@@ -97,7 +80,7 @@ export class Voter {
     }
 
     console.log(
-      `${this.fullName}: голос за ${found.candidate} (ID: ${this.ballotId}) враховано коректно`,
+      `${this.fullName}: голос за ${found.candidate} враховано коректно`,
     );
     return true;
   }

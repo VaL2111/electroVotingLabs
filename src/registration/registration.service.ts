@@ -5,9 +5,9 @@ import { CryptoService } from '../crypto/crypto.service';
 
 @Injectable()
 export class RegistrationService {
-  private readonly eligibleVoters = new Set<string>();
-  private readonly registeredVoters = new Map<string, AnonymousVoterRecord>();
-  private readonly usedRns = new Set<string>();
+  private readonly eligibleVoters: Set<string> = new Set();
+  private readonly registeredVoters: Map<string, AnonymousVoterRecord> =
+    new Map();
 
   constructor(private readonly cryptoService: CryptoService) {}
 
@@ -27,19 +27,17 @@ export class RegistrationService {
       return null;
     }
 
-    let rn: string;
-    do {
-      rn = this.cryptoService.generateRandomId();
-    } while (this.usedRns.has(rn));
-
-    this.usedRns.add(rn);
+    const rn = this.cryptoService.generateRandomId();
     this.registeredVoters.set(fullName, { rn, publicKey });
 
-    console.log(`Зареєстровано виборця: ${fullName} та видано rn: ${rn}`);
+    console.log(`Зареєстровано виборця "${fullName}" та видано RN: ${rn}`);
     return rn;
   }
 
   getAnonymousRegistryForEC(): AnonymousVoterRecord[] {
-    return Array.from(this.registeredVoters.values());
+    return Array.from(this.registeredVoters.values(), (record) => ({
+      rn: record.rn,
+      publicKey: { ...record.publicKey },
+    }));
   }
 }

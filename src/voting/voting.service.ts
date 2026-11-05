@@ -118,14 +118,6 @@ export class VotingService {
     return this.publishedBallots.map((b) => ({ ...b }));
   }
 
-  // Метод для симуляції негативного сценарію: ВК підмінює голос у результатах
-  tamperPublishedBallot(ballotId: string, fakeCandidate: string): void {
-    const target = this.publishedBallots.find((b) => b.id === ballotId);
-    if (target) {
-      target.candidate = fakeCandidate;
-    }
-  }
-
   publishResults(): void {
     console.log('ПІДСУМКИ ГОЛОСУВАННЯ (ВИБОРЧА КОМІСІЯ)');
 
