@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
-import { VotingService } from './voting.service';
+import { CecService } from './cec.service';
 import { CryptoModule } from '../crypto/crypto.module';
 
 @Module({
   imports: [CryptoModule],
-  providers: [VotingService],
-  exports: [VotingService],
+  providers: [CecService],
+  exports: [CecService],
 })
-export class VotingModule {}
+export class CecModule {}
