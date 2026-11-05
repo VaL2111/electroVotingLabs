@@ -95,24 +95,6 @@ export class CryptoService {
     return h;
   }
 
-  public encrypt(message: string, e: bigint, n: bigint): bigint[] {
-    const cipher: bigint[] = [];
-    for (let i = 0; i < message.length; i++) {
-      const m = BigInt(message.charCodeAt(i));
-      cipher.push(this.modExp(m, e, n));
-    }
-    return cipher;
-  }
-
-  public decrypt(cipher: bigint[], d: bigint, n: bigint): string {
-    let message = '';
-    for (const c of cipher) {
-      const m = this.modExp(c, d, n);
-      message += String.fromCharCode(Number(m));
-    }
-    return message;
-  }
-
   public sign(hash: bigint, d: bigint, n: bigint): bigint {
     return this.modExp(hash, d, n);
   }
@@ -129,5 +111,17 @@ export class CryptoService {
 
   public generateRandomId(): string {
     return randomUUID();
+  }
+
+  public encrypt(value: bigint, e: bigint, n: bigint): bigint {
+    return this.modExp(value, e, n);
+  }
+
+  public decrypt(cipher: bigint, d: bigint, n: bigint): bigint {
+    return this.modExp(cipher, d, n);
+  }
+
+  public multiplyCiphertexts(c1: bigint, c2: bigint, n: bigint): bigint {
+    return (c1 * c2) % n;
   }
 }
