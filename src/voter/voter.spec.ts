@@ -3,16 +3,17 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { CryptoModule } from '../crypto/crypto.module';
 import { CryptoService } from '../crypto/crypto.service';
 import { Voter } from './voter';
-import { PublishedBallot } from './voter.interface';
+import { SignedBallotPartMessage } from './voter.interface';
 
 describe('Voter', () => {
   let cryptoService: CryptoService;
   let voter: Voter;
+  let msgForEC1: SignedBallotPartMessage;
+  let msgForEC2: SignedBallotPartMessage;
 
   const voterName = 'Іван Ф.';
-  const chosenCandidate = 'Зеленський В. В.';
-  const fakeCandidate = 'Порошенко П. О.';
-  const mockedBallotId = '11111111-2222-4333-8444-555555555555';
+  const chosenCandidateId = 12;
+  const fakeCandidateId = 18;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -21,51 +22,60 @@ describe('Voter', () => {
 
     cryptoService = module.get<CryptoService>(CryptoService);
     voter = new Voter(voterName, cryptoService);
-    voter.setRn('valid-rn-uuid');
 
-    jest
-      .spyOn(cryptoService, 'generateRandomId')
-      .mockReturnValue(mockedBallotId);
-
-    const ecKeyPair = cryptoService.generateKeyPair();
-    voter.prepareEncryptedVote(chosenCandidate, ecKeyPair.publicKey);
-  });
-
-  it('Позитивний сценарій: знаходить власний ID у списку ВК і підтверджує правильність вибору', () => {
-    const publishedBallots: PublishedBallot[] = [
-      {
-        id: mockedBallotId,
-        candidate: chosenCandidate,
-        signature: '12345',
-      },
-    ];
-
-    expect(voter.verifyMyVote(publishedBallots)).toBe(true);
-  });
-
-  it('Негативний сценарій: виявляє підміну кандидата в опублікованому бюлетені', () => {
-    const errorSpy = jest.spyOn(console, 'error');
-    const publishedBallots: PublishedBallot[] = [
-      {
-        id: mockedBallotId,
-        candidate: fakeCandidate,
-        signature: '12345',
-      },
-    ];
-
-    expect(voter.verifyMyVote(publishedBallots)).toBe(false);
-    expect(errorSpy).toHaveBeenCalledWith(
-      `${voterName}: голос підмінено. Очікувався ${chosenCandidate}, але записано ${fakeCandidate}`,
+    const cecKeyPair = cryptoService.generateKeyPair();
+    [msgForEC1, msgForEC2] = voter.prepareSplitVote(
+      chosenCandidateId,
+      cecKeyPair.publicKey,
     );
   });
 
-  it('Негативний сценарій: виявляє відсутність власного ID в опублікованих результатах', () => {
-    const errorSpy = jest.spyOn(console, 'error');
-    const publishedBallots: PublishedBallot[] = [];
+  describe('Перевірка опублікованих частин у ВК-1 та ВК-2 (verifyPublishedParts)', () => {
+    it('Позитивний сценарій: підтверджує, що ВК-1 та ВК-2 опублікували саме ті зашифровані частини бюлетеня, які виборець їм передав', () => {
+      const result = voter.verifyPublishedParts(
+        [{ voterId: msgForEC1.voterId, encryptedPart: msgForEC1.encryptedPart }],
+        [{ voterId: msgForEC2.voterId, encryptedPart: msgForEC2.encryptedPart }],
+      );
 
-    expect(voter.verifyMyVote(publishedBallots)).toBe(false);
-    expect(errorSpy).toHaveBeenCalledWith(
-      `${voterName}: бюлетень з id ${mockedBallotId} відсутній у результатах`,
-    );
+      expect(result).toBe(true);
+    });
+
+    it('Негативний сценарій: виявляє підміну зашифрованої частини бюлетеня в одній із ВК', () => {
+      const errorSpy = jest.spyOn(console, 'error');
+      const tamperedPart = msgForEC1.encryptedPart + 1n;
+
+      const result = voter.verifyPublishedParts(
+        [{ voterId: msgForEC1.voterId, encryptedPart: tamperedPart }],
+        [{ voterId: msgForEC2.voterId, encryptedPart: msgForEC2.encryptedPart }],
+      );
+
+      expect(result).toBe(false);
+      expect(errorSpy).toHaveBeenCalledWith(
+        `${voterName}: ВК-1 опублікувала змінену частину бюлетеня! Очікувалось ${msgForEC1.encryptedPart}, отримано ${tamperedPart}`,
+      );
+    });
+  });
+
+  describe('Перевірка фінального відновленого бюлетеня у ЦВК (verifyFinalVote)', () => {
+    it('Позитивний сценарій: підтверджує, що після об’єднання частин ЦВК опублікувала правильний відновлений бюлетень', () => {
+      const result = voter.verifyFinalVote([
+        { voterId: msgForEC1.voterId, candidateId: chosenCandidateId },
+      ]);
+
+      expect(result).toBe(true);
+    });
+
+    it('Негативний сценарій: виявляє невідповідність опублікованого ЦВК відновленого бюлетеня зробленому вибору', () => {
+      const errorSpy = jest.spyOn(console, 'error');
+
+      const result = voter.verifyFinalVote([
+        { voterId: msgForEC1.voterId, candidateId: fakeCandidateId },
+      ]);
+
+      expect(result).toBe(false);
+      expect(errorSpy).toHaveBeenCalledWith(
+        `${voterName}: фінальний голос у ЦВК підмінено! Очікувався кандидат ID ${chosenCandidateId}, але записано ${fakeCandidateId}`,
+      );
+    });
   });
 });
