@@ -1,21 +1,12 @@
-export interface SignedBallotPayload {
-  voterId: string;
-  encryptedPart: string;
+import { PublicKey } from '../crypto/crypto.interfaces';
+
+export interface VoterPublicInfo {
+  name: string;
+  publicKey: PublicKey;
 }
 
-export interface SignedBallotPartMessage {
-  fullName: string;
-  voterId: string;
-  encryptedPart: bigint;
+export interface SignedBallotBatch {
+  senderName: string;
+  ballots: string[];
   signature: bigint;
-}
-
-export interface PublishedBallotPart {
-  voterId: string;
-  encryptedPart: bigint;
-}
-
-export interface PublishedFinalBallot {
-  voterId: string;
-  candidateId: number;
 }
