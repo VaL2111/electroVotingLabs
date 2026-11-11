@@ -1,23 +1,11 @@
-import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { CryptoService } from './crypto/crypto.service';
-import { CecService } from './cec/cec.service';
-import {
-  EC1_TOKEN,
-  EC2_TOKEN,
-  ElectionCommissionService,
-} from './election-commission/election-commission.service';
 import { Voter } from './voter/voter';
+import { SignedBallotBatch, VoterPublicInfo } from './voter/voter.interface';
 
 @Injectable()
 export class AppService implements OnModuleInit {
-  constructor(
-    private readonly cecService: CecService,
-    @Inject(EC1_TOKEN)
-    private readonly ec1Service: ElectionCommissionService,
-    @Inject(EC2_TOKEN)
-    private readonly ec2Service: ElectionCommissionService,
-    private readonly cryptoService: CryptoService,
-  ) {}
+  constructor(private readonly cryptoService: CryptoService) {}
 
   onModuleInit() {
     this.runSimulation();
@@ -26,72 +14,98 @@ export class AppService implements OnModuleInit {
   runSimulation() {
     console.log('СИМУЛЯЦІЯ ПРОТОКОЛУ');
 
-    console.log('\n1. Реєстрація кандидатів та виборців у ЦВК');
-    const candidate1 = this.cecService.registerCandidate('Зеленський В. В.');
-    const candidate2 = this.cecService.registerCandidate('Порошенко П. О.');
+    console.log(
+      '\n1. Формування списку кандидатів, виборців (A..E) та обмін відкритими ключами RSA',
+    );
+    const candidates = ['Зеленський В. В.', 'Порошенко П. О.'];
+    const voterNames = ['A', 'B', 'C', 'D', 'E'];
 
-    const voterNames = [
-      'Іван Ф.',
-      'Леся У.',
-      'Тарас Ш.',
-      'Михайло К.',
-      'Григорій С.',
-    ];
     const voters = voterNames.map(
       (name) => new Voter(name, this.cryptoService),
     );
 
+    const sharedVotersList: VoterPublicInfo[] = voters.map((voter) => ({
+      name: voter.name,
+      publicKey: voter.publicKey,
+    }));
+
     for (const voter of voters) {
-      this.cecService.registerVoter(voter.fullName, voter.publicKey);
+      voter.setElectionData(sharedVotersList, candidates);
     }
 
-    console.log('\n2. Передача списку виборців від ЦВК до ВК-1 та ВК-2');
-    const voterList = this.cecService.getVoterListForEC();
-    this.ec1Service.receiveVoterListFromCEC(voterList);
-    this.ec2Service.receiveVoterListFromCEC(voterList);
+    console.log(
+      `Зареєстровано виборців: ${sharedVotersList.map((v) => v.name).join(' -> ')}`,
+    );
+    console.log(`Кандидати: ${candidates.join(', ')}`);
 
     console.log(
-      '\n3. Голосування: поділ ID кандидата на множники та відправка частин у ВК-1 і ВК-2',
+      '\n2. Формування бюлетенів та 2 раунди багатошарового шифрування (порядок E -> D -> C -> B -> A)',
     );
     const choices = [
-      candidate1.id,
-      candidate2.id,
-      candidate1.id,
-      candidate2.id,
-      candidate1.id,
+      candidates[0],
+      candidates[1],
+      candidates[0],
+      candidates[1],
+      candidates[0],
     ];
 
+    const initialEncryptedBallots: string[] = [];
     for (let i = 0; i < voters.length; i++) {
-      const [msgForEC1, msgForEC2] = voters[i].prepareSplitVote(
-        choices[i],
-        this.cecService.cecPublicKey,
-      );
-      this.ec1Service.processBallotPart(msgForEC1);
-      this.ec2Service.processBallotPart(msgForEC2);
+      const encryptedBallot = voters[i].createEncryptedBallot(choices[i]);
+      initialEncryptedBallots.push(encryptedBallot);
     }
 
     console.log(
-      '\n4. Публікація частин бюлетенів комісіями ВК-1 та ВК-2 і перевірка виборцями',
+      '\n3. Перший раунд розшифрування та перемішування (порядок A -> B -> C -> D -> E)',
     );
-    const ec1Published = this.ec1Service.publishBallotParts();
-    const ec2Published = this.ec2Service.publishBallotParts();
+    let currentBatch: SignedBallotBatch | null = null;
 
-    for (const voter of voters) {
-      voter.verifyPublishedParts(ec1Published, ec2Published);
+    for (let i = 0; i < voters.length; i++) {
+      const input = i === 0 ? initialEncryptedBallots : currentBatch!;
+      currentBatch = voters[i].processDecryptionStep(input, 1);
+
+      if (!currentBatch) {
+        console.error('Голосування перервано у Раунді 1 розшифрування!');
+        return;
+      }
     }
 
     console.log(
-      '\n5. Гомоморфне об’єднання частин, розшифрування та підрахунок голосів у ЦВК',
+      '\n4. Другий раунд розшифрування та перемішування (передача від E до A, порядок A -> B -> C -> D -> E)',
     );
-    this.cecService.tallyResults(ec1Published, ec2Published);
-    this.cecService.publishResults();
+    for (let i = 0; i < voters.length; i++) {
+      currentBatch = voters[i].processDecryptionStep(currentBatch!, 2);
+
+      if (!currentBatch) {
+        console.error('Голосування перервано у Раунді 2 розшифрування!');
+        return;
+      }
+    }
 
     console.log(
-      '\n6. Перевірка виборцями фінальних розшифрованих бюлетенів ЦВК',
+      '\n5. Публікація відкритих бюлетенів виборцем E та незалежна перевірка підрахунку всіма учасниками',
     );
-    const finalBallots = this.cecService.getPublishedFinalBallots();
-    for (const voter of voters) {
-      voter.verifyFinalVote(finalBallots);
+    const lastVoter = voters[voters.length - 1];
+    const publishedOpenBallots = currentBatch!.ballots;
+
+    console.log(
+      `Опубліковані відкриті бюлетені: ${JSON.stringify(publishedOpenBallots)}`,
+    );
+
+    const publishedTally = lastVoter.countVotes(publishedOpenBallots);
+    if (!publishedTally) {
+      console.error('Помилка підрахунку голосів виборцем E!');
+      return;
+    }
+
+    console.log(`Підрахунок виборця ${lastVoter.name}:`);
+    for (const [candidate, count] of Object.entries(publishedTally)) {
+      console.log(`  ${candidate}: ${count} голосів`);
+    }
+
+    console.log('\nСамостійна перевірка результатів іншими виборцями:');
+    for (let i = 0; i < voters.length - 1; i++) {
+      voters[i].verifyResults(publishedOpenBallots, publishedTally);
     }
   }
 }
