@@ -110,18 +110,49 @@ export class CryptoService {
   }
 
   public generateRandomId(): string {
-    return randomUUID();
+    return randomUUID().slice(0, 8);
   }
 
-  public encrypt(value: bigint, e: bigint, n: bigint): bigint {
-    return this.modExp(value, e, n);
+  public encrypt(message: string, e: bigint, n: bigint): string {
+    const base = 500;
+    let cipher = '';
+
+    for (let i = 0; i < message.length; i++) {
+      const m = BigInt(message.charCodeAt(i));
+      const c = Number(this.modExp(m, e, n));
+      const high = Math.floor(c / base);
+      const low = c % base;
+      cipher += String.fromCharCode(high, low);
+    }
+
+    return cipher;
   }
 
-  public decrypt(cipher: bigint, d: bigint, n: bigint): bigint {
-    return this.modExp(cipher, d, n);
+  public decrypt(cipher: string, d: bigint, n: bigint): string {
+    if (cipher.length % 2 !== 0) {
+      throw new Error('Некоректна довжина шифротексту для розшифрування');
+    }
+
+    const base = 500;
+    let message = '';
+
+    for (let i = 0; i < cipher.length; i += 2) {
+      const high = cipher.charCodeAt(i);
+      const low = cipher.charCodeAt(i + 1);
+      const c = BigInt(high * base + low);
+      const m = this.modExp(c, d, n);
+      message += String.fromCharCode(Number(m));
+    }
+
+    return message;
   }
 
-  public multiplyCiphertexts(c1: bigint, c2: bigint, n: bigint): bigint {
-    return (c1 * c2) % n;
+  public shuffle(items: string[]): string[] {
+    const copy = [...items];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
   }
 }
