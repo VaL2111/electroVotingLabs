@@ -69,7 +69,6 @@ export class CryptoService {
     } while (q === p);
 
     const n = p * q;
-
     const phi = (p - 1n) * (q - 1n);
 
     let e = 3n;
@@ -110,49 +109,77 @@ export class CryptoService {
   }
 
   public generateRandomId(): string {
-    return randomUUID().slice(0, 8);
+    return randomUUID();
   }
 
-  public encrypt(message: string, e: bigint, n: bigint): string {
-    const base = 500;
-    let cipher = '';
+  public encryptNumber(value: bigint, e: bigint, n: bigint): bigint {
+    return this.modExp(value, e, n);
+  }
 
+  public decryptNumber(cipher: bigint, d: bigint, n: bigint): bigint {
+    return this.modExp(cipher, d, n);
+  }
+
+  public multiplyCiphertexts(c1: bigint, c2: bigint, n: bigint): bigint {
+    return (c1 * c2) % n;
+  }
+
+  public encryptText(message: string, e: bigint, n: bigint): bigint[] {
+    const cipher: bigint[] = [];
     for (let i = 0; i < message.length; i++) {
       const m = BigInt(message.charCodeAt(i));
-      const c = Number(this.modExp(m, e, n));
-      const high = Math.floor(c / base);
-      const low = c % base;
-      cipher += String.fromCharCode(high, low);
+      cipher.push(this.modExp(m, e, n));
     }
-
     return cipher;
   }
 
-  public decrypt(cipher: string, d: bigint, n: bigint): string {
-    if (cipher.length % 2 !== 0) {
-      throw new Error('Некоректна довжина шифротексту для розшифрування');
-    }
-
-    const base = 500;
+  public decryptText(cipher: bigint[], d: bigint, n: bigint): string {
     let message = '';
-
-    for (let i = 0; i < cipher.length; i += 2) {
-      const high = cipher.charCodeAt(i);
-      const low = cipher.charCodeAt(i + 1);
-      const c = BigInt(high * base + low);
+    for (const c of cipher) {
       const m = this.modExp(c, d, n);
       message += String.fromCharCode(Number(m));
     }
-
     return message;
   }
 
-  public shuffle(items: string[]): string[] {
+  public shuffle<T>(items: T[]): T[] {
     const copy = [...items];
     for (let i = copy.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [copy[i], copy[j]] = [copy[j], copy[i]];
     }
     return copy;
+  }
+
+  public splitIntoFactors(value: number, count = 4): bigint[] {
+    if (!Number.isInteger(value) || value < 2) {
+      throw new Error('Значення для розкладання має бути цілим числом >= 2');
+    }
+
+    const factors: number[] = [];
+    let remainder = value;
+    for (let divisor = 2; divisor * divisor <= remainder; divisor++) {
+      while (remainder % divisor === 0) {
+        factors.push(divisor);
+        remainder /= divisor;
+      }
+    }
+    if (remainder > 1) {
+      factors.push(remainder);
+    }
+
+    if (factors.length < count) {
+      throw new Error(
+        `Число ${value} має лише ${factors.length} простих множників, а потрібно щонайменше ${count}`,
+      );
+    }
+
+    while (factors.length > count) {
+      const last = factors.pop()!;
+      const randomIndex = Math.floor(Math.random() * factors.length);
+      factors[randomIndex] *= last;
+    }
+
+    return this.shuffle(factors).map((factor) => BigInt(factor));
   }
 }
